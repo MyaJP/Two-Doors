@@ -1,0 +1,71 @@
+name: Publish
+
+# Zips pack/ into a data pack and uploads it.
+# Run it from the Actions tab (workflow_dispatch). Untick a site to skip it.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      modrinth:
+        description: 'Upload to Modrinth'
+        type: boolean
+        default: true
+      curseforge:
+        description: 'Upload to CurseForge'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+      - name: Zip the data pack
+        run: |
+          mkdir -p dist
+          cd pack
+          find . -type f -exec touch -d '2026-01-01 00:00:00' {} +
+          find . -type f | LC_ALL=C sort | zip -X -q "../dist/Two_Doors-${{ steps.v.outputs.version }}.zip" -@
+          cd .. && ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: datapack
+          path: dist/*.zip
+
+  publish:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: datapack
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${{ needs.build.outputs.version }}"
+          gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create "$TAG" dist/*.zip --target "${{ github.sha }}" --title "$TAG" --notes-file release-notes.md --repo "${{ github.repository }}"
+      - uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ inputs.modrinth && 'NsrK2zMV' || '' }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          curseforge-id: ${{ inputs.curseforge && '1753198' || '' }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          files: dist/*.zip
+          name: ${{ needs.build.outputs.version }}
+          version: ${{ needs.build.outputs.version }}
+          version-type: release
+          changelog-file: release-notes.md
+          loaders: datapack
+          game-versions: '>=1.13'
